@@ -1,0 +1,1650 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="UTF-8"></meta>
+	<title>Lightning Ledger</title>
+</head>
+
+<body>
+	<canvas id="canvasMain"></canvas>
+	<div id="divCPanel"></div>
+</body>
+
+<script type="text/javascript">
+
+/*
+	v007
+	last modified 2021 Jul 31
+	reddit: CoolGamesChad
+	
+	I haven't finished tidying and commenting, so forgive me. I know a lot of this will not make any sense without explanation. My priority has simply been to make it work. Expect an update soon.
+*/
+
+{ // Util, Queue...
+	var Util = {};
+	
+	/* Random numbers are relevant to the simulation, not to the ledger protocol. a seed-based generator is useful for reproducing simulations. */
+	
+	// use the current time as an arbitrary seed for RNG:
+	Util.r = (new Date().getTime() +643709624) >>> 0;
+	
+	/* here, set Util.r to any numerical seed to reproduce an exact simulation. */
+	// Util.r = 1000;
+	
+	/* Returns a random float 0 <= n < 1. */
+	Util.rand = function() {
+		// arbitrarily mix up the current running value...
+		Util.r ^= Util.r << 13;
+		Util.r ^= Util.r >> 17;
+		Util.r ^= Util.r << 5;
+		Util.r >>>= 0; // to unsigned 32-bit value.
+		return Util.r /0xffffffff; // to float in range [0,1).
+	}
+	
+	/* Returns a random integer less than n. */
+	Util.dice = function(n) {
+		return Math.floor(Util.rand() *n);
+	}
+	
+	/* Returns a randomly-selected element from the array. */
+	Util.choose = function(arr) {
+		return arr[Util.dice(arr.length)];
+	}
+	
+	/* Returns a random hex string of the given length. Useful for giving arbitrary, unique names to objects. A simple stand-in for what would really be a SHA-256 of the object's contents. */
+	Util.randomHex = function(length) {
+		let string = '';
+		for (let i=0; i<length; i++) string += Util.dice(16).toString(16);
+		return string;
+	}
+	
+	/* Returns the 2D Euclidean distance between the two points. */
+	Util.distance = function(a,b) {
+		let x = b.x -a.x;
+		let y = b.y -a.y;
+		return Math.sqrt(x *x +y *y);
+	}
+	
+	
+	/* A handy bag of tricks for working with sorted arrays. */
+	var Queue = {};
+	
+	/* Queue expects an array to have a "cmp" property, which refers to a comparator function, and expects the array to be sorted by that comparator. A queue does not allow duplicates; if two objects compare to zero, only one may exist in that queue. */
+	
+	/* Returns the array index at which the element should be inserted.	A simple binary search using the array's comparator. */
+	Queue.getIndex = function(arr, e) {
+		let min = 0;
+		let max = arr.length;
+		let mid = min +(max -min >>1);
+		
+		while (min < max) {
+			let c = arr.cmp.call(null, e, arr[mid]);
+			if (c < 0) {
+				max = mid;
+				mid = min +(max -min >>1);
+			}
+			else
+			if (c > 0) {
+				min = mid +1;
+				mid = min +(max -min >>1);
+			}
+			else break;
+		}
+		
+		return mid;
+	}
+	
+	/* Returns the matching element from the queue, or null if not present. */
+	Queue.get = function(arr, e) {
+		let idx = Queue.getIndex(arr, e);
+		if (!arr[idx]) return null;
+		if (arr.cmp(arr[idx], e) != 0) return null; // element not present.
+		return arr[idx];
+	}
+	
+	/* Inserts the element into the array, unless a matching element is already present, and returns which element persists. */
+	Queue.push = function(arr, e) {
+		let idx = Queue.getIndex(arr, e);
+		if (arr[idx])
+		if (arr.cmp(arr[idx], e) == 0) return arr[idx]; // element is present.
+		arr.splice(idx, 0, e);
+		return e;
+	}
+	
+	/* Removes and returns the matching element from the queue, or null if not present. */
+	Queue.remove = function(arr, e) {
+		let idx = Queue.getIndex(arr, e);
+		if (!arr[idx]) return null;
+		if (arr.cmp(arr[idx], e) != 0) return null; // element not found.
+		return arr.splice(idx, 1)[0];
+	}
+	
+	/* A comparator for primitive objects. */
+	Queue.cmp = function(a,b) {
+		if (a < b) return -1;
+		if (a > b) return  1;
+		return 0;
+	}
+}
+
+{ // Event, Message, Analyzer...
+	
+	/* A scheduled physical event in the simulation. */
+	function Event(fnc, src, params, t) {
+		// the function to call.
+		this.fnc = fnc;
+		
+		// the value to use as "this."
+		this.src = src; 
+		
+		// array of parameters to give to the function call.
+		this.params = params;
+		
+		// simulation time at which to call the function.
+		this.t = Math.max(sim.time, t); // ensure it is not sooner than the present.
+		
+		// give this event a unique index:
+		this.index = Event.index++;
+		
+		// add this event to the simulation schedule:
+		Queue.push(sim.events, this);
+	}
+	
+	/* Events are given unique IDs to avoid comparing equal with one another. */
+	Event.index = -0x80000000;
+	
+	/* Events are sorted chronologically, then by unique index. */
+	Event.cmpTime = function(a,b) {
+		if (a.t < b.t) return -1;
+		if (a.t > b.t) return  1;
+		if (a.index < b.index) return -1;
+		if (a.index > b.index) return  1;
+		return 0;
+	}
+	
+	
+	/* Represents a digital message in transit via internet protocol. Euclidean distance approximates the communication delay. */
+	function Message(a, b, t0, rq) {
+		// the time at which this message is sent.
+		this.t0 = t0;
+		
+		// get the distance to the target, in km:
+		let dist = Util.distance(a, b) *(20000 /cvs.width);
+		
+		// the time at which this message arrives at its target.
+		this.t = t0 +dist /sim.messageSpeed;
+		
+		// the source location (x,y).
+		this.a = a;
+		
+		// the target location (x,y).
+		this.b = b;
+		
+		// the body of this message: a coin's request.
+		this.rq = rq;
+		
+		// schedule the target to hear this message when it arrives: 
+		let e = new Event(User.prototype.hearGossip, b, [this.rq], this.t);
+		e.message = this;
+	}
+	
+	/* Draws a little white dot on the canvas at this message's physical location. */
+	Message.prototype.draw = function() {
+		
+		if (sim.time < this.t0) return; // hasn't been sent yet.
+		
+		// get time parameter...
+		let t = (sim.time -this.t0) /(this.t -this.t0);
+		let s = 1 -t;
+		
+		// interpolate between source and target by time parameter...
+		let x = this.a.x *s +this.b.x *t;
+		let y = this.a.y *s +this.b.y *t;
+		
+		// round for clean canvas aliasing...
+		x = Math.round(x);
+		y = Math.round(y);
+		
+		let w = 2;
+		ctx.fillStyle = 'rgb(255,255,255,1)';
+		ctx.fillRect(x -w, y -w, w <<1, w <<1);
+	}
+	
+	
+	// Analyzer
+	var Az = {};
+	
+	/* A set of users are in consensus if, for every coin that any user is willing to endorse, all users acknowledge that coin with enough confidence that they would also endorse it, naturally, if stake were to be demonstrated (the value of currency is its value to others).
+	
+	The higher the quantification of doubt, the more stake would need to be demonstrated to earn an endorsement. This quantification is printed to the console as "maxDoubt."
+		• A value of 0 means there is universal endorsement on every coin that is endorsed by any user. Hooray!
+		• A value of 1 means some user has irreconcilable doubt on a coin that another user endorses. This would mean the protocol had failed. Boo!
+		• A value less than 0.2 seems to be normal.
+	
+	The analyzer makes two passes, each visiting every user:
+		0) Creates the meta-ledger: all coins that are endorsed by any user.
+		1) Creates a hash of every user's ledger, ignoring any coin not in the meta-ledger.
+	
+	The lesser 24 bits of each 32-bit hash become the RGB color of the node drawn on the canvas.
+	*/
+	
+	Az.enabled = true;
+	
+	/* How many coins the analyzer will scan per frame.
+	Reduce it if the simulation is laggy, otherwise set this as high as possible for the fastest analysis. */
+	Az.rate = 2048;
+	
+	Az.beginPass = [
+	function() {
+	// pass 0: begin creating the meta-ledger...
+		console.log('maxDoubt: ', Az.maxDoubt);
+		Az.pass = 0;
+		Az.goodCoins = {};
+		
+		Az.scanCoin = function(coin) {
+			if (isNaN(coin.date)) return;
+			if (coin.doubt > 0) return;
+			
+			Az.goodCoins[coin.name] = true;
+		};
+		
+		Az.finishedUser = function(user) {};
+	},
+	function() {
+	// pass 1: begin hashing all user ledgers...
+		Az.maxDoubt = 0;
+		Az.pass = 1;
+		Az.hash = 0x60000005; // start with some big, arbitrary prime number.
+		
+		Az.scanCoin = function(coin) {
+			if (isNaN(coin.date)) return;
+			if (coin.doubt >= 1) return;
+			if (!Az.goodCoins[coin.name]) return;
+			
+			let string = coin.name;
+			for (let i=0; i<string.length; i++)
+				// add the next char, multiply by a big number, keep 32 bits:
+				Az.hash = ((Az.hash +string.charCodeAt(i)) *0x3fffff) >>> 0;
+			
+			Az.maxDoubt = Math.max(Az.maxDoubt, coin.doubt);
+		};
+		
+		Az.finishedUser = function(user) {
+			if (user.ledgerHash != Az.hash) {
+				user.ledgerHash = Az.hash;
+				user.blip = 1;
+			}
+			Az.hash = 0x60000005;
+		};
+	}
+	];
+	
+	Az.step = function(tickets) {
+		if (!tickets) return;
+		
+		if (Az.userIndex >= sim.users.length) {
+		// finished with all users; go to next phase.
+			Az.beginPass[(Az.pass +1) %2]();
+			Az.userIndex = 0;
+			Az.coinIndex = 0;
+		}
+		
+		let user = sim.users[Az.userIndex];
+		
+		if (Az.coinIndex >= user.ledger.length) {
+			
+			Az.finishedUser(user);
+			
+			// to next user...
+			Az.userIndex++;
+			Az.coinIndex = 0;
+			
+			return Az.step(tickets);
+		}
+		
+		Az.scanCoin(user.ledger[Az.coinIndex]);
+		tickets--;
+		
+		Az.coinIndex++;
+		return Az.step(tickets);
+	}
+	
+	Az.maxDoubt = 0;
+	Az.userIndex = 0;
+	Az.coinIndex = 0;
+}
+
+{ // Simulator...
+// the master control object.
+	
+	// Simulation
+	var sim = {};
+	
+	// Interaction controls...
+	sim.playToFrame = -1;
+	sim.timeScale = 1/16;
+	sim.autoTestEnabled = true;
+	
+	// Network properties and protocol constants...
+	sim.numUsers = 27;
+	sim.numPeers = 8;
+	sim.numCoins = 100;
+	sim.chanceAttackDate = 15;
+	sim.chanceAttackDoubleSpend = 15;
+	sim.timeSyncAccuracy = 2;
+	sim.energyHalfLife = 5;
+	sim.taskLogLength = 30;
+	
+	
+	// the speed at which internet messages move, in km/s. the default value is chosen to approximate a realistic communication delay.
+	sim.messageSpeed = 20000 /0.133; // 20,000 km in 0.133 seconds
+	
+	// the speed at which users process messages, in bytes per second.
+	sim.processSpeed = 4096 *10; // 4kb each, 10 per second.
+	
+	// the maximum amount of time, in seconds, that any message might require to fully saturate the network, not accounting for interrupting traffic.
+	sim.satTime = (20000 /sim.messageSpeed) *5;
+	
+	// an arbitrary surplus of chronological clarity to be considered preferable.
+	sim.prefTime = sim.satTime *6;
+	
+	// the accuracy of user clocks in ±PPM. clocks will deviate more as the simulation goes on. in real life, daily or weekly synchronizations would prevent this from accumulating to a consequential amount.
+	sim.clockAccuracy = 20;
+	
+	// Execution... 
+	
+	// simulated current time, in seconds.
+	sim.time = 0;
+	
+	// current frame count of simulation.
+	sim.frameIndex = 0;
+	
+	// goal time between frames of simulation.
+	sim.frameInterval = 1000 /60;
+	
+	sim.users = [];
+	
+	sim.events = [];
+	sim.events.cmp = Event.cmpTime;
+	
+	
+	/* Creates a new network, starting a new simulation. */
+	sim.createNetwork = function() {
+		sim.playToFrame = Math.max(sim.playToFrame, sim.frameIndex);
+		
+		// print the seed for the user to copy from console:
+		console.log('random seed: '+Util.r);
+	
+		sim.users.length = 0; // destroy all users
+		sim.events.length = 0; // clear the event schedule
+		sim.time = 0;
+		
+		for (let s of sim.networkPropertyInputs) sim[s.name] = s.valueAsNumber;
+		
+		sim.energyDecay = Math.pow(0.5, 1 /sim.energyHalfLife);
+		sim.processTime = 1 /sim.processSpeed;
+		sim.clockDeviation = sim.clockAccuracy /1000000;
+		
+		{ // create users...
+			sim.numUsers = Math.min(sim.numUsers, 100);
+			for (let i=0; i<sim.numUsers; i++) {
+				let o = new User();
+				o.x = Util.dice(cvs.width -48) +24;
+				o.y = Util.dice(cvs.height -48) +24;
+				o.index = sim.users.length;
+				sim.users.push(o);
+			}
+		}
+		
+		{ // assign peers...
+			let num = Math.min(sim.numPeers, sim.numUsers -1); 
+			for (let o of sim.users) o.pickPeers(num);
+		}
+		
+		// bump nodes apart if they are overlapping...
+		for (let r=0; r<3; r++) {
+			const m = 24;
+			
+			for (let i=0; i<sim.users.length; i++) {
+				let a = sim.users[i];
+				
+				for (let k=i+1; k<sim.users.length; k++) {
+					let b = sim.users[k];
+					
+					let dx = b.x -a.x;
+					let dy = b.y -a.y;
+					
+					let distance = dx *dx +dy *dy;
+					if (distance >= m *m) continue;
+					
+					distance = Math.sqrt(distance);
+					let diff = m -distance;
+					distance = 1 /distance;
+					
+					dx *= distance;
+					dy *= distance;
+					
+					a.x -= dx *diff;
+					a.y -= dy *diff;
+					
+					b.x += dx *diff;
+					b.y += dy *diff;
+					
+					a.x = Math.round(a.x);
+					a.y = Math.round(a.y);
+					
+					b.x = Math.round(b.x);
+					b.y = Math.round(b.y);
+				}
+			}
+		}
+		
+		sim.numCoins = Math.min(sim.numCoins, 1000);
+		sim.mint(sim.numCoins, 10);
+		
+		sim.autoTest();
+		sim.transactionsDone = 0;
+		
+		Az.beginPass[0]();
+	}
+	
+	sim.step = function() {
+		if (sim.frameIndex > sim.playToFrame) return;
+		
+		let goalTime = sim.time +(sim.frameInterval *sim.timeScale) /1000;
+		
+		// walk toward goal time, consuming events...
+		while (sim.events.length) {
+			// peek at the next event:
+			let e = sim.events[0];
+			
+			// stop walking if the event is after the goal time:
+			if (e.t > goalTime) break;
+			
+			// remove the event from the queue:
+			sim.events.shift();	
+			
+			// advance the simulation time to the event:
+			sim.time = e.t;
+			
+			// perform the event:
+			e.fnc.call(e.src, ...e.params);
+		}
+		
+		// arrive at goal time.
+		sim.time = goalTime;
+		
+		if (Az.enabled) Az.step(Az.rate);
+		
+		// clear the canvas, draw all the stuff...
+		
+		ctx.fillStyle = '#404040';
+		ctx.fillRect(0, 0, cvs.width, cvs.height);
+		
+		for (let o of sim.events) if (o.message) o.message.draw();
+		for (let o of sim.users) o.draw();
+		
+		sim.frameIndex++;
+	}
+	
+	sim.autoTest = function() {		
+		if (sim.autoTestEnabled)
+		for (let i=0; i<100; i++) {
+			if (sim.getWorkRemaining() >= sim.satTime *6) break;
+			Util.choose(sim.users).autoTest();
+		}
+			
+		new Event(sim.autoTest, null, [], sim.time +sim.satTime *(1/4));
+	}
+	
+	/* Returns the total processing time of all unique pending tasks in the network. */
+	sim.getWorkRemaining = function() {
+		let allTasks = {};
+		let work = 0;
+		for (let n of sim.users) {
+			for (let task of n.pendingTasks) {
+				if (allTasks[task.rq.name]) continue;
+				work += task.rq.size *sim.processTime *2;
+				allTasks[task.rq.name] = true;
+			}
+		}
+		return work;
+	}
+	
+	/* Distributes new coins among users. */
+	sim.mint = function(n, amount) {
+		while (n > 0)
+		for (let u of sim.users) {
+			if (n <= 0) break;
+			
+			let tx = new Tx();
+			tx.outputs.push({owner: u, value: amount});
+			
+			let fakeEnergy = Util.rand() *2000;
+			
+			let formalDate = sim.time -sim.timeSyncAccuracy *2;
+			tx.size = tx.getSize();
+			
+			for (let u of sim.users) {
+				let c = new Coin(tx, 0);
+				c.create();
+				c.energy = fakeEnergy;
+				c.date = u.time() -sim.timeSyncAccuracy *2 -sim.prefTime;
+				c.formalDate = formalDate;
+				Queue.push(u.ledger, c);
+			}
+			
+			n--;
+		}
+	}
+}
+
+{ // HTML, CSS, divs, inputs, etc...
+	
+	{ let div = document.body;
+		div.style.height = '960px';
+		div.style.width = 720 +5 +'px';
+		div.style.margin = '10px auto';
+		div.style.padding = '0px';
+		
+		div.style.display = 'flex';
+		div.style.flexFlow = 'column wrap';
+		div.style.alignItems = 'flex-start';
+		div.style.alignContent = 'flex-start';
+		
+		div.style.backgroundColor = '#c0c0c0';
+		div.style.fontFamily = "'Verdana'";
+		div.style.fontSize = '10pt';
+	}
+	
+	{ var cvs = document.getElementById('canvasMain'); 
+		cvs.width = 720;
+		cvs.height = 445;
+		cvs.style.margin = '2px';
+		cvs.style.flex = '0 0 auto';
+		
+		cvs.tipText = "<b>Simulation View</b><p>A geographic domain, 20,000 km in width. The boxes represent physical nodes of the network, and the white dots represent internet messages between them.</p><p>The color of each node is a representation of the contents of that user's ledger, such that if two users bear the same color, their ledgers match, and the protocol has been successful. A node will 'blip' when a new color is assigned.</p>";
+		cvs.onmouseover = function() {divTips.innerHTML = cvs.tipText;}
+		
+		var ctx = cvs.getContext('2d', {
+			'alpha': false,
+			'desynchronized': true,
+		});
+	}
+
+	{ var divCPanel = document.getElementById('divCPanel');
+		let div = divCPanel;
+		
+		div.style.width = cvs.width +'px';
+		div.style.margin = '2px';
+		div.style.padding = '0px';
+		
+		div.style.display = 'flex';
+		div.style.flexFlow = 'row nowrap';
+		div.style.alignItems = 'flex-start';
+		div.style.flex = '1 0 auto';
+		
+		div.style.backgroundColor = "#e0e0e0";
+		
+		{ let div = document.createElement('div');
+			var divInputs = div;
+			
+			div.style.margin = '10px';
+			div.style.display = 'table';
+			divCPanel.appendChild(div);
+		}
+
+		{ let div = document.createElement('div'); 
+			var divTips = div;
+			
+			div.style.margin = '10px';
+			div.style.width = '380px';
+			divCPanel.appendChild(div);
+		}
+	}
+	
+	// inputs...
+	
+	{ let inp = document.createElement('button'); // play/pause
+		inp.style.display = 'table-cell';
+		inp.style.fontSize = '1.618em';
+		inp.style.width = '60px';
+		inp.style.height = '38px';
+		inp.style.padding = '0';
+		
+		inp.onclick = function(e) {
+			if (sim.playToFrame == Infinity) {
+			// is playing; pause it.
+				e.target.innerHTML = '&#9658'; // play symbol
+				sim.playToFrame = -1;
+			}
+			else {
+			// is paused; play it.
+				e.target.innerHTML = '&#10074;&#10074'; // pause symbol
+				sim.playToFrame = Infinity;
+			}
+		};
+		
+		inp.tipText = "<b>Play/Pause Simulation</b><p>While the simulation is playing, users will constantly consume their task queues and update their ledgers, and the analyzer will operate if enabled.</p>";
+		
+		let div = document.createElement('div');
+			div.style.display = 'table-row';
+			
+		div.onmouseover = function() {divTips.innerHTML = inp.tipText;}
+		
+		div.appendChild(inp);
+		divInputs.appendChild(div);
+		
+		inp.click();
+	}
+	
+	{ let inp = createInputRange('timeScale', '',
+		function(value) {
+			if (value == 0)
+				sim.timeScale = 0;
+			else
+				sim.timeScale = 1 /2 **(9 -value);
+		});
+		
+		inp.min = 0;
+		inp.max = 9;
+		inp.step = 1;
+		inp.value = 5;
+		
+		inp.tipText = "<b>Simulation Speed</b><p>Adjust the slider to watch network activity in slow-motion, or to completely halt it and let the analyzer catch up.</p>";
+	}
+
+	{ let inp = createInputButton('test', 'Test', function() {
+			Util.choose(sim.users).test();
+		});
+	
+		inp.tipText = "<b>Test</b><p>A random user will select a random user and pay a random amount to that user, which may be himself. If a double-spend attack is elected, a second random payment may be made using the same coin(s).</p><p>If nothing happens, it is because the chosen user doesn't have funds.</p>";
+	}
+	
+	{ let inp = createInputCheckbox('autoTestEnabled', 'Auto-Test', function(state) {
+			sim.autoTestEnabled = state;
+		});
+		
+		inp.checked = sim[inp.name];
+		
+		inp.tipText = "<b>Auto-Test</b><p>When enabled, all users will constantly author random payments to keep their task queues full, to simulate full bandwidth utilization and resistance to spam.</p><p>When disabled, users will consume their task queues to completion, but no new transactions will be generated.</p><p>If attacks are enabled, coins will sometimes be destroyed by illegal use. This may result in a situation in which no users have any coins left to spend.</p>";
+	}
+	
+	{ let inp = createInputCheckbox('analyzerEnabled', 'Analyzer',
+		function(state) {
+			Az.enabled = state;
+			if (!state) Az.beginPass[0]();
+		});
+		
+		inp.checked = true;
+		
+		inp.tipText = "<b>Analyzer</b><p>When enabled, the program will constantly analyze the contents of all users' ledgers and assign them colors to indicate success or failure of the protocol. If there are no messages in transit, and the analyzer has had time to complete, then all nodes should appear in the same color, meaning they are in consensus.</p><p>Reducing the simulation speed will allow the analyzer more relative time to work.</p>";
+	}
+	
+	sim.networkPropertyInputs = [];
+	
+	{ let inp = createInputNumber('numUsers', 'Number of users: ');
+		inp.min = 1;
+		inp.max = 100;
+		inp.step = 1;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Number of Users</b><p>The number of nodes in the simulation.</p>";
+	}
+	
+	{ let inp = createInputNumber('numPeers', 'Degree of infection: ');
+		inp.min = 0;
+		inp.max = 100;
+		inp.step = 1;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Degree of Infection</b><p>Each user will randomly select this many other users to send their messages to. If this number is too low, messages may not fully saturate the network, causing failure.</p>";
+	}
+	
+	{ let inp = createInputNumber('numCoins', 'Number of coins: ');
+		inp.min = 0;
+		inp.max = 1000;
+		inp.step = 1;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Number of Coins</b><p>The number of coins to distribute among users when the network is created.</p><p>More coins will result in a more busy and complex simulation.</p>";
+	}
+	
+	{ let inp = createInputNumber('chanceAttackDate', 'Bad time %: ');
+		inp.min = 0;
+		inp.max = 100;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Bad Time %</b><p>The percentage of transactions that will be authored with a bad timestamp in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to back-date their transactions to steal coin energy, and keeps all users in agreement about how to respond.</p>";
+	}
+	
+	{ let inp = createInputNumber('chanceAttackDoubleSpend', 'Double-spend %: ');
+		inp.min = 0;
+		inp.max = 100;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Double-Spend %</b><p>The percentage of transactions that will be followed by a second transaction with some of the same coins, in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to spend a coin that they no longer own, and keeps all users in agreement about how to respond.</p>";
+	}
+	
+	{ let inp = createInputNumber('timeSyncAccuracy', 'Time sync accuracy: ');
+		inp.min = 0;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Time Sync Accuracy</b><p>The maximum difference, in seconds, between a user's clock time and real time.</p><p>Users will compensate for potential error by choosing dates for their transactions that are later in the future for safety. It will have no effect on the speed at which transactions are confirmed.</p><p>This demonstrates how the protocol does not require its participants to have precise timekeeping, which would otherwise be an attack vector.</p>";
+	}
+	
+	{ let inp = createInputNumber('energyHalfLife', 'Energy half-life: ');
+		inp.min = 0;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Energy Half-Life</b><p>The elapsed time at which a coin's energy will have decayed to 50%.</p><p>It has not yet been decided what values are optimal, so I've chosen this value arbitrarily.</p>";
+	}
+	
+	{ let inp = createInputNumber('taskLogLength', 'Task log length: ');
+		inp.min = 0;
+		sim.networkPropertyInputs.push(inp);
+		
+		inp.tipText = "<b>Task Log Length</b><p>The length of each user's task memory, in seconds.</p><p>This log enables the user to infer message saturation, and must be kept long enough to account for all variations and interruptions in network traffic. However, longer logs will require more of your system memory.</p><p>In the real world, there is no reason why these logs wouldn't be hours long at least, maybe even days.</p>";
+	}
+	
+	{ let inp = createInputButton('apply', 'Create Network', sim.createNetwork);
+		inp.tipText = "<b>Create Network</b><p>The simulation would be voided if the protocol was modified mid-execution. Therefore, press this button to generate a new simulation with the specified properties.</p>";
+	}
+	
+	for (let s of sim.networkPropertyInputs) s.value = sim[s.name];
+	
+	function createInputButton(name, label, fnc) {	
+		let div = document.createElement('div');
+			div.style.display = 'table-row';
+			
+		let inp = document.createElement('button');
+			inp.style.display = 'table-cell';
+			inp.style.marginTop = '8px';
+			inp.style.padding = '8px 13px';
+			inp.name = name;
+			inp.id = 'inputButton_'+name;
+			inp.innerHTML = label;
+			inp.onclick = fnc;
+			
+		div.onmouseover = function() {divTips.innerHTML = inp.tipText;}
+		
+		div.appendChild(inp);
+		divInputs.appendChild(div);
+		
+		return inp;
+	}
+
+	function createInputCheckbox(name, label, fnc) {	
+		let div = document.createElement('div');
+			div.style.display = 'table-row';
+			
+		let inp = document.createElement('input');
+			inp.style.marginTop = '8px';
+			inp.name = name;
+			inp.type = 'checkbox';
+			inp.id = 'inputCheckbox_'+name;
+			if (fnc) inp.onchange = function(e) {fnc(e.target.checked)};
+			
+		let lbl = document.createElement('label');
+			lbl.setAttribute('for', inp.id);
+			lbl.innerHTML = label;
+			
+		div.onmouseover = function() {divTips.innerHTML = inp.tipText;}
+		
+		div.appendChild(inp);
+		div.appendChild(lbl);
+		divInputs.appendChild(div);
+		
+		return inp;
+	}
+
+	function createInputNumber(name, label, fnc) {	
+		let div = document.createElement('div');
+			div.style.display = 'table-row';
+			
+		let inp = document.createElement('input');
+			inp.style.display = 'table-cell';
+			inp.style.marginTop = '8px';
+			inp.style.width = '120px';
+			inp.name = name;
+			inp.type = 'number';
+			inp.id = 'inputNumber_'+name;
+			if (fnc) inp.onchange = function(e) {fnc(e.target.value)};
+			
+		let lbl = document.createElement('label');
+			lbl.style.display = 'table-cell';
+			lbl.style.paddingRight = '10px';
+			lbl.setAttribute('for', inp.id);
+			lbl.innerHTML = label;
+			
+		div.onmouseover = function() {divTips.innerHTML = inp.tipText;}
+		
+		div.appendChild(lbl);
+		div.appendChild(inp);
+		divInputs.appendChild(div);
+		
+		return inp;
+	}
+	
+	function createInputRange(name, label, fnc) {	
+		let div = document.createElement('div');
+			div.style.display = 'table-row';
+			
+		let inp = document.createElement('input');
+			inp.style.display = 'table-cell';
+			inp.style.marginTop = '8px';
+			inp.name = name;
+			inp.type = 'range';
+			inp.id = 'inputRange_'+name;
+			if (fnc) inp.oninput = function(e) {fnc(e.target.value)};
+			
+		let lbl = document.createElement('label');
+			lbl.style.display = 'table-cell';
+			lbl.style.paddingRight = '10px';
+			lbl.setAttribute('for', inp.id);
+			lbl.innerHTML = label;
+			
+		div.onmouseover = function() {divTips.innerHTML = inp.tipText;}
+		
+		div.appendChild(inp);
+		if (label) div.appendChild(lbl);
+		divInputs.appendChild(div);
+		
+		return inp;
+	}
+}
+
+{ // Tx, Rq, Task, Coin, User...
+	
+	/* Transaction. A transaction replaces some coins in the ledger with new coins, having the same total value. */
+	function Tx() {
+		// the unique name of this transaction.
+		// this would be a secure hash of the contents of this tx.
+		this.name = Util.randomHex(16);
+		
+		// the names of the coins being spent, in a canonical order.
+		this.inputs = [];
+		this.inputs.cmp = Queue.cmp;
+		
+		// the definitions of coins being created, as {owner, value}.
+		this.outputs = [];
+	}
+	
+	/* Returns the digital size of this transaction message, in bytes.
+	The real-world protocol would have to formally define this so that all users know the exact same number, because this is how much energy gets added to the coins. */
+	Tx.prototype.getSize = function() {
+		let b = 0;
+		b += 1; // number of inCoins
+		b += (32 +1) *this.inputs.length; // name for all input coins
+		b += 1; // number of outCoins
+		b += (512 +8) *this.outputs.length; // public key, value for all output coins
+		return b;
+	}
+	
+	
+	/* Request. A request is a message that defines a transaction, specifies an input of that transaction, and gives that input's digital signature of that transaction. A transaction will not take place until all input coins have given this authentication individually. */
+	function Rq(tx, idx) {
+		
+		// the unique name of this request.
+		// name of the tx, followed by 1-byte index.
+		this.name = tx.name +('00' +idx.toString(16)).slice(-3);
+		
+		// the requested transaction.
+		this.tx = tx;
+		
+		// the index of the tx's input coin making the request.
+		this.sourceIndex = idx;
+		
+		// the author's formalization of this request's date of effect.
+		this.formalDate = NaN;
+		
+		this.size = this.getSize();
+	}
+	
+	/* Returns the digital size of this request message, in bytes. */
+	Rq.prototype.getSize = function() {
+		let b = this.tx.size;
+		b += 1; // index of the input coin making the request.
+		b += 512; // signature of input coin on this request.
+		b += 8; // date of effect
+		return b;
+	}
+	
+	
+	/* The representation of a request as perceived by a particular user. */
+	function Task(user, rq, sourceCoin) {
+		// the user to which this task belongs.
+		this.user = user;
+		
+		// the request that this task represents.
+		this.rq = rq;
+		
+		// the coin making this request, found in the user's ledger.
+		this.sourceCoin = sourceCoin;
+		
+		// the date at which this task was done.
+		this.dateDone = Infinity;
+	}
+	
+	/* Returns the priority index of this request at the given time. */
+	Task.prototype.getPriority = function(time) {
+		// the value/energy ratio of the source coin:
+		return this.sourceCoin.value /this.sourceCoin.getEnergy(time);
+	}
+	
+	/* Sorts tasks by descending priority index. The greatest priority tasks are performed first. */
+	Task.cmpPriority = function(a,b) {
+		let t = Math.max(a.sourceCoin.formalDate, b.sourceCoin.formalDate);
+		let ap = a.getPriority(t);
+		let bp = b.getPriority(t);
+		if (ap > bp) return -1;
+		if (ap < bp) return  1;
+		
+		// when two requests have the exact same priority index, they will be sorted by their unique names:
+		return Queue.cmp(a.rq.name, b.rq.name);
+	}
+	
+	/* Sorts tasks in chronological order of the date they were done, then by chronological order of the date they will be done. */
+	Task.cmpDateDone = function(a,b) {
+		if (isNaN(a.dateDone)) {
+			if (!isNaN(b.dateDone)) return 1; // A after B
+			// both are NaN; compare priority...
+		}
+		else {
+			if (isNaN(b.dateDone)) return -1; // A before B
+			// neither are NaN; compare numbers:
+			if (a.dateDone < b.dateDone) return -1;
+			if (a.dateDone > b.dateDone) return  1;
+			// same date done? fall on priority...
+		}
+		
+		return Task.cmpPriority(a,b);
+	}
+	
+	/* Sorts tasks by their unique name. */
+	Task.cmpName = function(a,b) {
+		return Queue.cmp(a.rq.name, b.rq.name);
+	}
+	
+	/* Sorts a time value in an array of tasks done. */
+	Task.cmpLog = function(a,b) {
+		if (a < b.dateDone) return -1;
+		return 1;
+	}
+	
+	
+	/* The representation of a coin in the ledger of a particular user.	These are not shared between users; they simulate independently perceived data. */
+	function Coin(tx, idx) {
+		// the tx that defines this coin.
+		this.tx = tx;
+		
+		// the unique name of this coin.
+		// name of the tx, followed by 1-byte index.
+		this.name = tx.name +('00' +idx.toString(16)).slice(-3);
+		
+		// the owner of this coin.
+		// (this would be a public key)
+		this.owner = tx.outputs[idx].owner;
+		
+		// the monetary value of this coin.
+		this.value = tx.outputs[idx].value;
+	}
+	
+	Coin.prototype.create = function() {
+		
+		// creation...
+		
+		// the tasks that define the creation of this coin as an output.
+		// like pieces of a jigsaw puzzle, this coin manifests when the last
+		// of these is done.
+		this.sourceTasks = [];
+		this.sourceTasks.cmp = Task.cmpName;
+		
+		// the observed time of this coin's origin;
+		// the date at which the final sourceTask is done.
+		this.date = NaN;
+		
+		// the latest formal date among this coin's source requests.
+		this.formalDate = NaN;
+		
+		// the energy of this coin at its formal time of origin.
+		// this is inherited from its source coins and source tasks.
+		this.energy = 0;
+		
+		
+		// usage...
+		
+		// all tasks signed by this coin, in the order they were/will be done.
+		this.tasks = [];
+		this.tasks.cmp = Task.cmpDateDone;
+		
+		// the first task done by this coin (the first request granted).
+		// if protocol is followed, there won't be another.
+		this.spent = null;
+		
+		// the designation of risk on this chain of custody.
+		this.doubt = 0;
+	}
+	
+	Coin.prototype.manifest = function() {	
+		// get formal date...
+		for (let task of this.sourceTasks)
+			if (!(task.rq.formalDate <= this.formalDate))
+				this.formalDate = task.rq.formalDate;
+			
+		// inherit energy from parent coins...
+		let totalValue = 0;
+		let totalEnergy = 0;		
+		for (let task of this.sourceTasks) {
+			totalValue += task.sourceCoin.value;
+			totalEnergy += task.sourceCoin.getEnergy(this.formalDate);
+			totalEnergy += task.rq.size;
+		}
+		this.energy = totalEnergy *(this.value /totalValue);
+	}
+	
+	// return the energy of this coin at the specific time.
+	Coin.prototype.getEnergy = function(time) {
+		return this.energy *sim.energyDecay **(time -this.formalDate);
+	}	
+	
+	Coin.cmpName = function(a,b) {
+		return Queue.cmp(a.name, b.name);
+	}
+	
+	Coin.cmpValue = function(a,b) {
+		if (a.value < b.value) return -1;
+		if (a.value > b.value) return  1;
+		return Queue.cmp(a.name, b.name);
+	}
+	
+	
+	// relationships between server and client are beyond the domain of this simulation.
+	function User() {
+		
+		// sorted list of all coins.
+		this.ledger = [];
+		this.ledger.cmp = Coin.cmpName;
+		
+		this.spentCoins = [];
+		this.spentCoins.cmp = Coin.cmpName;
+		
+		// a sensitive 32-bit digest of the ledger, as an integer.
+		this.ledgerHash = 0;
+		
+		// the tasks I am scheduled to process, in order of highest priority.
+		this.pendingTasks = [];
+		this.pendingTasks.cmp = Task.cmpPriority;
+		
+		// tasks I will process, but not until the sourceCoin is saturated.
+		this.preTasks = [];
+		this.preTasks.cmp = Task.cmpName;
+		
+		this.echoes = {};
+		
+		// be idle until this time, to maintain standard processing pace.
+		this.taskCooldownDate = sim.time;
+		
+		// my next upcoming task processing event.
+		this.doTaskEvent = null;
+		
+		// the other users I have chosen to gossip with.
+		this.peers = [];
+		
+		// the log of all tasks I have processed.
+		this.taskLog = [];
+		this.taskLog.cmp = Task.cmpLog;
+		
+		this.syncError = 1 +(Util.rand() *2 -1) *sim.clockDeviation;
+		this.sync();
+	}
+	
+	// as client...
+	
+	User.prototype.getWallet = function(doubleSpend) {
+		let wallet = [];
+		wallet.cmp = Coin.cmpValue;
+		wallet.balance = 0;
+		for (let coin of this.ledger) {
+			// can't use a coin without signing key (not my coin):
+			if (coin.owner != this) continue;
+			
+			// don't use a coin before its formal date of effect:
+			if (coin.formalDate > this.time()) continue;
+			
+			// don't use an undesirable coin:
+			if (coin.doubt > 0) continue;
+			
+			if (!doubleSpend) {
+				// don't use a coin with a pending task:
+				if (coin.tasks.length != 0) continue;
+			}
+			
+			// don't use a coin without sufficent saturation:
+			let sat = this.getCoinSaturation(coin, this.time());
+			if (sat < sim.prefTime) continue;
+			
+			Queue.push(wallet, coin);
+			wallet.balance += coin.value;
+		}
+		return wallet;
+	}
+	
+	User.prototype.makePayment = function(to, amount, doubleSpend) {		
+		let tx = new Tx();
+		tx.author = this;
+		
+		// get value-ascending list of spendable coins:
+		let wallet = this.getWallet(doubleSpend);
+		
+		// choose amount, if not specified...
+		if (isNaN(amount)) amount = Math.max(
+			Util.Util.dice(10) +1,
+			Math.round(wallet.balance *0.75)
+		);
+		
+		// choose coins to spend...
+		let total = 0;
+		for (let i=0; i<wallet.length; i++) {
+			let coin = wallet[i];
+			if (total >= amount) break;
+			
+			Queue.push(tx.inputs, coin.name);
+			total += coin.value;
+		}
+		
+		// if insufficient funds, cancel:
+		if (total < amount) return false;
+		
+		// send amount to desired payee...
+		tx.outputs.push({
+			owner: to,
+			value: amount,
+		});
+		
+		// send change back to myself...
+		if (total > amount) 
+			tx.outputs.push({
+				owner: this,
+				value: total -amount,
+			});
+			
+		tx.size = tx.getSize();
+		
+		let speaker = this;
+		if (doubleSpend) speaker = Util.choose(sim.users);
+		
+		// each input coin issues this request...
+		for (let i=0; i<tx.inputs.length; i++) {
+			let rq = new Rq(tx, i);
+			speaker.hearGossip(rq);
+		}
+	}
+	
+	// as network node...
+	
+	User.prototype.hearGossip = function(rq) {		
+		
+		// check for echo...
+		if (this.echoes[rq.name]) return;
+		
+		// find source coin in my ledger...
+		let sourceCoin = Queue.get(
+			this.ledger, {name: rq.tx.inputs[rq.sourceIndex]}
+		);
+		
+		if (!sourceCoin)
+		sourceCoin = Queue.get(
+			this.spentCoins, {name: rq.tx.inputs[rq.sourceIndex]}
+		);
+		
+		// if I can't find the source coin, I can't interpret this message:
+		if (!sourceCoin) return;
+		
+		// a coin doesn't formally exist until it manifests:
+		if (isNaN(sourceCoin.date)) return;
+		
+		// I have found the coin.
+		
+		// create a task:
+		let task = new Task(this, rq, sourceCoin);
+		
+		// signature check would be here.
+		
+		// this request is intelligible and authenticated.
+		// add the request name to my echo set:
+		this.echoes[rq.name] = true;
+		
+		// too early?
+		let sat = this.getCoinSaturation(task.sourceCoin, this.time());
+		
+		if (sat < sim.satTime) {
+		// too early; drop this task in the preTask buffer...
+			Queue.push(this.preTasks, task);
+			
+			let et = this.time() +(sim.satTime -sat);
+			if (this.readyTaskEvent) {
+				if (this.readyTaskEvent.t <= et) return;
+				Queue.remove(sim.events, this.readyTaskEvent);
+			}
+			this.readyTaskEvent = 
+				new Event(User.prototype.readyTasks, this, [], et);
+			
+			return;
+		}
+		
+		this.hearTask(task);
+	}
+	
+	User.prototype.hearTask = function(task) {
+		// insert this task in sourceCoin's task queue:
+		let idx = Queue.getIndex(task.sourceCoin.tasks, task);
+		task.sourceCoin.tasks.splice(idx, 0, task);
+		
+		// if this task is not the first or second operation upon sourceCoin,
+		// it is not relevant for processing or gossiping.
+		if (idx >= 2) return;
+		
+		// this task is relevant.
+		// add this task my work queue:
+		Queue.push(this.pendingTasks, task);
+		
+		// if it bumped a pending task to the third index,
+		// remove that one from my work queue:
+		if (task.sourceCoin.tasks.length > 2)
+			Queue.remove(this.pendingTasks, task.sourceCoin.tasks[2]);
+		
+		// if my work queue was empty, I need to wake up...
+		if (!this.doTaskEvent) this.doTaskEvent =
+			new Event(User.prototype.doTask, this, [], this.taskCooldownDate);
+	}
+	
+	User.prototype.doTask = function() {
+		this.doTaskEvent = null;
+		
+		this.cleanTaskLog();
+		
+		// nothing to do? become idle.
+		if (!this.pendingTasks.length) return;
+		
+		// pluck the highest-priority task from my work queue:
+		let task = this.pendingTasks.shift();
+		
+		// this task is being done now.
+		task.dateDone = this.time();
+		
+		if (task.rq.tx.simIndex === undefined) {
+			task.rq.tx.simIndex = sim.transactionsDone++;
+			if (sim.transactionsDone %100 == 0)
+				console.log(sim.transactionsDone, 'transactions done.');
+		}
+		
+		if (isNaN(task.rq.formalDate)) {
+			task.rq.formalDate =
+				task.dateDone
+				+sim.satTime *4
+				+sim.timeSyncAccuracy *2;
+			
+			if (Util.rand() *100 < sim.chanceAttackDate) {
+				task.rq.formalDate -= (sim.satTime *4 +sim.timeSyncAccuracy *2)
+				*(Util.rand() *2);
+				
+				if (task.rq.formalDate < task.sourceCoin.formalDate)
+					task.rq.formalDate = task.sourceCoin.formalDate +0.001;
+			}
+		}
+		
+		
+		if (task.sourceCoin.spent)
+		// a request by this coin was previously done.
+		// oopsie! this coin has committed a no-no!
+			this.doBadTask(task);
+		else
+		// this is the coin's first request to be done.
+		// all good.
+			this.doGoodTask(task);
+		
+		this.taskLog.push(task);
+		
+		// simulate the time it takes to process this request,
+		// then begin to gossip this request.
+		new Event(
+			User.prototype.gossip, this, [task.rq],
+			sim.time +task.rq.size *sim.processTime
+		);
+		
+		// to maintain the standard processing pace,
+		// wait in proportion to the number of bytes in the request I just processed.
+		this.taskCooldownDate = sim.time +task.rq.size *sim.processTime *2;
+		
+		// if there is more work, automatically schedule the next job:
+		if (this.pendingTasks.length) this.doTaskEvent =
+			new Event(User.prototype.doTask, this, [], this.taskCooldownDate);
+	}
+	
+	User.prototype.doGoodTask = function(task) {
+		// the first request done for this coin.
+		
+		// assign doubt for bad timestamp...
+		let sat = this.getSaturation(task, task.rq.formalDate, this.time());
+		let doubt = sat /(sim.satTime *4 +sim.timeSyncAccuracy *8);
+		this.doubtCoin(task.sourceCoin, doubt);
+		
+		
+		// find or create output coins...
+		for (let i=0; i<task.rq.tx.outputs.length; i++) {
+			let output = task.rq.tx.outputs[i];
+			
+			let coin = new Coin(task.rq.tx, i);
+			let get = Queue.get(this.ledger, coin);
+			
+			if (get) coin = get;
+			else {
+				coin.create();
+				Queue.push(this.ledger, coin);
+			}
+			
+			coin.doubt = Math.max(task.sourceCoin.doubt, coin.doubt);
+			Queue.push(coin.sourceTasks, task);
+			
+			if (coin.sourceTasks.length == coin.tx.inputs.length) {
+				coin.date = this.time();
+				coin.manifest();
+			}
+		}
+		
+		task.sourceCoin.spent = task;
+		
+		Queue.remove(this.ledger, task.sourceCoin);
+		Queue.push(this.spentCoins, task.sourceCoin);
+		
+		new Event(
+			User.prototype.spentCoin, this, [task.sourceCoin],
+			sim.time +sim.prefTime *2
+		);
+	}
+	
+	User.prototype.doBadTask = function(task) {
+		let sat = this.getSaturation(
+			task.sourceCoin.spent, task.sourceCoin.spent.dateDone, this.time()
+		);
+		let doubt = 1.5 -sat /(sim.satTime *4);
+		this.doubtCoin(task.sourceCoin, doubt);
+	}
+	
+	User.prototype.autoTest = function() {
+		if (this.pendingTasks.length < 50) this.test();
+	}
+	
+	User.prototype.test = function() {
+		// let b = this; do {b = Util.choose(sim.users)} while (b == this);
+		let b = Util.choose(sim.users);
+		this.makePayment(b, Util.dice(10) +1);
+		
+		if (Util.rand() *100 < sim.chanceAttackDoubleSpend) {
+			// b = this; do {b = Util.choose(sim.users)} while (b == this);
+			let b = Util.choose(sim.users);
+			
+			new Event(
+				User.prototype.makePayment, this, [b, Util.dice(10) +1, true],
+				sim.time +Util.rand() *sim.prefTime
+			);
+		}
+	}
+	
+	
+	sim.debug = [];
+	
+	User.prototype.doubtCoin = function(coin, doubt) {
+		// if already more doubted, ignore:
+		if (coin.doubt > doubt) return;
+		
+		// apply doubt to this coin:
+		coin.doubt = doubt;
+		
+		// pass to all affected custody chains...
+		
+		// if this coin is unspent, it has no children:
+		if (!coin.spent) return;
+		
+		let tx = coin.spent.rq.tx;
+		
+		for (let i=0; i<tx.outputs.length; i++) {
+			let tmp = {name: tx.name +('00' +i.toString(16)).slice(-3)};
+			let get = Queue.get(this.ledger, tmp);
+			this.doubtCoin(get, doubt);
+		}
+	}
+	
+	// estimates the tasks's saturation between the two times.
+	User.prototype.getSaturation = function(task, t0, t1, debug) {
+		let sat = 0;
+		let idx = Queue.getIndex(this.taskLog, t0);
+		
+		if (t1 <= t0) return 0;
+		
+		let ths = this.taskLog[idx -1];
+		let nxt = this.taskLog[idx];
+		
+		while (true) {
+			if (ths && Task.cmpPriority(task, ths) > 0) {
+			// interruption...
+				let end = ths.dateDone +ths.rq.size *sim.processTime *2;
+				if (t1 <= end) return sat;
+				if (t0 < end) t0 = end;
+			}
+			
+			if (nxt) {
+				if (t1 <= nxt.dateDone) return sat += t1 -t0;
+				
+				if (t0 < nxt.dateDone) {
+					sat += nxt.dateDone -t0;
+					t0 = nxt.dateDone;
+				}
+				
+				ths = nxt;
+				nxt = this.taskLog[++idx];
+				continue;
+			}
+			
+			if (t0 < t1) sat += t1 -t0;
+			return sat;
+		}
+	}
+	
+	User.prototype.getCoinSaturation = function(coin, time) {
+		if (isNaN(coin.date)) return 0;
+		
+		if (!coin.sourceTasks.length) return Infinity;
+		
+		let min = NaN;
+		for (let sourceTask of coin.sourceTasks) {
+			let s = this.getSaturation(sourceTask, sourceTask.dateDone, time);
+			
+			if (s >= min) continue;
+			min = s;
+		}
+		return min;
+	}
+	
+	User.prototype.cleanTaskLog = function() {
+		let idx = Queue.getIndex(this.taskLog, this.time() -sim.taskLogLength);
+		
+		if (0)
+		for (let i=0; i<idx; i++) {
+			let sat = this.getSaturation(this.taskLog[i], this.taskLog[i].dateDone, this.time());
+			if (sat < sim.prefTime) debugger;
+		}
+		
+		this.taskLog.splice(0, idx);
+	}
+	
+	User.prototype.spentCoin = function(coin) {
+		
+		let sat = this.getSaturation(
+			coin.spent, coin.spent.dateDone, this.time()
+		);
+		
+		if (sat >= sim.prefTime -.0001) {
+			// remove spent coin from ledger:
+			Queue.remove(this.spentCoins, coin);
+			
+			// cancel any pending tasks; they are now unintelligible:
+			for (let task of coin.tasks) {
+				Queue.remove(this.pendingTasks, task);
+				delete this.echoes[task.rq.name];
+			}
+			
+			// delete pointers for gc:
+			delete coin.spent;
+			delete coin.tasks;
+			delete coin.sourceTasks;
+			
+			return;
+		}
+		
+		new Event(
+			User.prototype.spentCoin, this, [coin],
+			sim.time +(sim.prefTime -sat) *2
+		);
+	}
+	
+	User.prototype.readyTasks = function() {
+		
+		this.readyTaskEvent = null;
+		
+		// check all preTasks for ready state...
+		
+		let maxSat = NaN;
+		for (let i=0; i<this.preTasks.length; i++) {
+			let task = this.preTasks[i];
+			
+			let sat = this.getCoinSaturation(task.sourceCoin, this.time());
+			if (sat >= sim.satTime -0.0001) {
+				// remove task from preTasks:
+				this.preTasks.splice(i--,1);
+				
+				// hear the task now:
+				this.hearTask(task);
+				continue;
+			}
+			
+			if (sat <= maxSat) continue;
+			maxSat = sat;
+		}
+		
+		if (isNaN(maxSat)) return;
+		
+		let et = sim.time +(sim.satTime -maxSat);
+		if (this.readyTaskEvent) {
+			if (this.readyTaskEvent.t <= et) return;
+			Queue.remove(sim.events, this.readyTaskEvent);
+		}
+		
+		this.readyTaskEvent = 
+			new Event(User.prototype.readyTasks, this, [], et);
+	}
+	
+	// chooses other users to gossip with.
+	User.prototype.pickPeers = function(num) {
+		this.peers.length = 0;
+		
+		for (let i=0; i<num; i++) 
+			while (true) {
+				let peer = Util.choose(sim.users);
+				if (peer == this) continue;
+				if (this.peers.includes(peer)) continue;
+				
+				this.peers.push(peer);
+				break;
+			}
+	}
+	
+	// sends the message to peers.
+	User.prototype.gossip = function(rq) {
+		for (let i=0; i<this.peers.length; i++)
+			new Message(this, this.peers[i], sim.time +0.00125 *i, rq);
+	}
+	
+	User.prototype.draw = function() {
+		let cr = (this.ledgerHash >>> 24) &0xff;
+		let cg = (this.ledgerHash >>> 16) &0xff;
+		let cb = (this.ledgerHash >>>  0) &0xff;
+		
+		if (this.blip) {					
+			ctx.fillStyle = 'rgb(255,255,255,0.25)';
+			ctx.beginPath();
+			ctx.arc(this.x, this.y, 24, 0, Math.PI *2);
+			ctx.fill();
+			this.blip = 0;
+		}
+		
+		let w = 5;
+		let h = 8;
+		ctx.fillStyle = 'rgb(0,0,0,0.4)';
+		ctx.setTransform(1, 0, -0.5, 0.5, this.x +w, this.y +h *0.5);
+		ctx.fillRect(-w -2, -h -2, w *2 +4, h *2 +4);
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		
+		ctx.fillStyle = 'rgb(0,0,0,1)';
+		ctx.fillRect(this.x -w -2, this.y -h -2, w *2 +4, h *2 +4);
+		
+		ctx.fillStyle = 'rgb('+cr+','+cg+','+cb+',1)';
+		ctx.fillRect(this.x -w, this.y -h, w *2, h *2);
+		
+		ctx.fillStyle = 'rgb(0,0,0,1)';
+		ctx.fillRect(this.x -w, this.y -h +4, w *2, 1);
+		ctx.fillRect(this.x -w, this.y -h +7, w *2, 1);
+		ctx.fillRect(this.x +w -3, this.y -h +1, 2, 2);
+	}
+	
+	User.prototype.time = function() {
+		return this.timeValue +(sim.time -this.syncTime) *this.syncError;
+	}
+	
+	User.prototype.sync = function() {
+		this.syncTime = sim.time;
+		this.timeValue = sim.time +(Util.rand() *2 -1) *sim.timeSyncAccuracy;
+		
+		// schedule the next sync for a day or two:
+		new Event(
+			User.prototype.sync, this, [],
+			sim.time +(1 +Util.rand()) *60 *60 *24
+		);
+	}
+}
+
+sim.createNetwork();
+
+sim.loop = function(timeNow) {
+	
+	// how much time until the desired time, in intervals:
+	var timeRemaining = (sim.goalTime -timeNow) /sim.frameInterval;
+	
+	// if the goal is more than half an interval beyond, skip this repaint:
+	if (timeRemaining > 0.5) {
+		requestAnimationFrame(sim.loop);
+		return;
+	}
+	
+	// if we are more than half an interval late, adjust the schedule.
+	if (timeRemaining < -0.5) sim.goalTime = timeNow;
+	
+	// increment the goal time by one interval:
+	sim.goalTime += sim.frameInterval;
+	
+	sim.step();
+	
+	requestAnimationFrame(sim.loop);
+}
+
+// begin the loop...
+requestAnimationFrame(function(timeNow) {
+	sim.goalTime = timeNow;
+	sim.loop(timeNow);
+});
+
+</script>
+
+</html>
