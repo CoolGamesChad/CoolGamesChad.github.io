@@ -15,7 +15,7 @@
 
 /*
 	v007
-	last modified 2021 Jul 31
+	last modified 2021 Aug 01
 	reddit: CoolGamesChad
 	
 	I haven't finished tidying and commenting, so forgive me. I know a lot of this will not make any sense without explanation. My priority has simply been to make it work. Expect an update soon.
@@ -1281,15 +1281,19 @@
 		}
 		
 		if (isNaN(task.rq.formalDate)) {
-			task.rq.formalDate =
-				task.dateDone
-				+sim.satTime *4
-				+sim.timeSyncAccuracy *2;
+			task.rq.formalDate = task.dateDone;
+			
+			// delay by a safe margin:
+			task.rq.formalDate +=
+				(sim.satTime +sim.timeSyncAccuracy *2) *4;
 			
 			if (Util.rand() *100 < sim.chanceAttackDate) {
-				task.rq.formalDate -= (sim.satTime *4 +sim.timeSyncAccuracy *2)
-				*(Util.rand() *2);
 				
+				// backdate by a randomized amount:
+				task.rq.formalDate -=
+					(sim.satTime *4 +sim.timeSyncAccuracy *2) *(Util.rand() *10);
+				
+				// violations of chronology are not intended:
 				if (task.rq.formalDate < task.sourceCoin.formalDate)
 					task.rq.formalDate = task.sourceCoin.formalDate +0.001;
 			}
@@ -1328,7 +1332,7 @@
 		
 		// assign doubt for bad timestamp...
 		let sat = this.getSaturation(task, task.rq.formalDate, this.time());
-		let doubt = sat /(sim.satTime *4 +sim.timeSyncAccuracy *8);
+		let doubt = sat /((sim.satTime +sim.timeSyncAccuracy *2) *4);
 		this.doubtCoin(task.sourceCoin, doubt);
 		
 		
@@ -1388,7 +1392,7 @@
 			
 			new Event(
 				User.prototype.makePayment, this, [b, Util.dice(10) +1, true],
-				sim.time +Util.rand() *sim.prefTime
+				sim.time +(Util.rand() +0.3333) *sim.satTime *6
 			);
 		}
 	}
