@@ -564,7 +564,7 @@
 		cvs.style.margin = '2px';
 		cvs.style.flex = '0 0 auto';
 		
-		cvs.tipText = "<b>Simulation View</b><p>A geographic domain, 20,000 km in width. The boxes represent physical nodes of the network, and the white dots represent internet messages between them.</p><p>The color of each node is a representation of the contents of that user's ledger, such that if two users bear the same color, their ledgers match, and the protocol has been successful. A node will 'blip' when a new color is assigned.</p>";
+		cvs.tipText = "<b>View</b><p>The canvas represents a geographic domain 20,000 km in width. The boxes represent physical nodes of the network, and the white dots represent internet messages between them.</p><p>See notes on 'Analyzer' about node colors.</p>";
 		cvs.onmouseover = function() {divTips.innerHTML = cvs.tipText;}
 		
 		var ctx = cvs.getContext('2d', {
@@ -679,7 +679,7 @@
 		
 		inp.checked = true;
 		
-		inp.tipText = "<b>Analyzer</b><p>When enabled, the program will constantly analyze the contents of all users' ledgers and assign them colors to indicate success or failure of the protocol. If there are no messages in transit, and the analyzer has had time to complete, then all nodes should appear in the same color, meaning they are in consensus.</p><p>Reducing the simulation speed will allow the analyzer more relative time to work.</p>";
+		inp.tipText = "<b>Analyzer</b><p>When enabled, each node will be given a color representing the contents of its ledger, such that nodes with identical ledgers will have identical colors.</p><p>To verify consensus, disable Auto-Test and set Simulation Speed to maximum. Wait for all remaining tasks to be processed, and then all nodes should have the same color.</p><p>Analysis is more complex when there are more coins and more users. Reducing the simulation speed will allow the analyzer more time to work relative to the simulation.</p>";
 	}
 	
 	sim.networkPropertyInputs = [];
@@ -690,7 +690,7 @@
 		inp.step = 1;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Number of Users</b><p>The number of nodes in the simulation.</p>";
+		inp.tipText = "<b>Number of Users</b><p>The number of nodes in the simulation.</p><p>A higher number will demand more system memory and may impact performance.</p>";
 	}
 	
 	{ let inp = createInputNumber('numPeers', 'Degree of infection: ');
@@ -708,7 +708,7 @@
 		inp.step = 1;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Number of Coins</b><p>The number of coins to distribute among users when the network is created.</p><p>More coins will result in a more busy and complex simulation.</p>";
+		inp.tipText = "<b>Number of Coins</b><p>The number of coins to distribute among users when the network is created.</p><p>More coins will result in a more busy and complex simulation. A higher number will demand more system memory and may impact performance.</p>";
 	}
 	
 	{ let inp = createInputNumber('chanceAttackDate', 'Bad time %: ');
@@ -731,7 +731,7 @@
 		inp.min = 0;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Time Sync Accuracy</b><p>The maximum difference, in seconds, between a user's clock time and real time.</p><p>Users will compensate for potential error by choosing dates for their transactions that are later in the future for safety. It will have no effect on the speed at which transactions are confirmed.</p><p>This demonstrates how the protocol does not require its participants to have precise timekeeping, which would otherwise be an attack vector.</p>";
+		inp.tipText = "<b>Time Sync Accuracy</b><p>The maximum difference, in seconds, between a user's clock time and real time.</p><p>Users will compensate for potential error by choosing dates for their transactions that are later in the future, for safety. It will not reduce the speed at which transactions are confirmed.</p><p>This demonstrates how the protocol does not require its participants to have precise timekeeping, which would otherwise represent a vulnerability.</p>";
 	}
 	
 	{ let inp = createInputNumber('energyHalfLife', 'Energy half-life: ');
