@@ -14,11 +14,36 @@
 <script type="text/javascript">
 
 /*
-	v007
-	last modified 2021 Aug 01
-	reddit: CoolGamesChad
-	
-	I haven't finished tidying and commenting, so forgive me. I know a lot of this will not make any sense without explanation. My priority has simply been to make it work. Expect an update soon.
+	v008
+	last modified 2022 Jan 18
+	Chad Chisholm
+	email:	chad.chisholm@protonmail.com
+	reddit: u/CoolGamesChad
+*/
+
+/*
+Lightning Ledger
+
+What is it?
+
+A decentralized public ledger without validators. Transactions are shared, with concordant sorting and pacing, infectiously between peers. If any token produces conflicting instructions, each node will maintain their first impression, but will also consider the token damaged and unwanted according to the brevity of physical time between the competing instructions.
+
+How would it work?
+
+Each instruction has an implicit priority index and work duration. The priority is based on token usage metrics, in such a way that each unit of currency is entitled to an equal share of bandwidth. The work duration is based on the digital complexity of the instruction, so that all members can maintain the same pace.
+
+Each member will execute and relay an instruction as soon as he knows of no other instruction of higher priority. Therefore, every ledger modification will progress to fully saturate the network as long as it has the highest priority. If another instruction has higher priority, it will interrupt the other by its work duration. Therefore, every participant can infer the saturation time of every past transaction by subtracting interruptions from elapsed time.
+
+An instruction that conflicts with a recently executed instruction will not be executed, but it will be relayed so that all members can witness the offense. Each member then considers the token damaged according to the lowness of the first instruction's saturation as he perceives it. If its saturation is more than a few seconds, the conflict means nothing and can be ignored.
+
+Why?
+
+• the fastest possible decentralized ledger, limited only by physics.
+• completely free to use; no transaction fees.
+• self-incentivizing; awareness requires participation.
+• unassailable decentralization; no miners, no stakers, no voting.
+• robustness through redundancy instead of responsibility.
+• simple source code, easy to maintain.
 */
 
 { // Util, Queue...
@@ -181,7 +206,7 @@
 		// the target location (x,y).
 		this.b = b;
 		
-		// the body of this message: a coin's request.
+		// the body of this message: a token's request.
 		this.rq = rq;
 		
 		// schedule the target to hear this message when it arrives: 
@@ -215,23 +240,22 @@
 	// Analyzer
 	var Az = {};
 	
-	/* A set of users are in consensus if, for every coin that any user is willing to endorse, all users acknowledge that coin with enough confidence that they would also endorse it, naturally, if stake were to be demonstrated (the value of currency is its value to others).
+	/* Consensus means that no two members appraise the condition of any particular token differently by more than one saturation interval.
 	
-	The higher the quantification of doubt, the more stake would need to be demonstrated to earn an endorsement. This quantification is printed to the console as "maxDoubt."
-		• A value of 0 means there is universal endorsement on every coin that is endorsed by any user. Hooray!
-		• A value of 1 means some user has irreconcilable doubt on a coin that another user endorses. This would mean the protocol had failed. Boo!
-		• A value less than 0.2 seems to be normal.
+	The maximum difference, in saturation intervals, will be printed to the console as "maxDoubt." Any value less than 1 is healthy. A value of 1 or greater indicates failure of the lightning ledger protocol.
 	
 	The analyzer makes two passes, each visiting every user:
-		0) Creates the meta-ledger: all coins that are endorsed by any user.
-		1) Creates a hash of every user's ledger, ignoring any coin not in the meta-ledger.
+		• "pass 0" creates the meta-ledger: all tokens that are endorsed by any member as having good enough condition to accept as a payment.
+		• "pass 1" creates a hash of every user's ledger, ignoring any token not in the meta-ledger.
 	
 	The lesser 24 bits of each 32-bit hash become the RGB color of the node drawn on the canvas.
+	
+	The result is a proof that there is consensus of the existence of every token that any member considers to be viable, and that the maximum difference in perception of that token's condition are within expected limits.
 	*/
 	
 	Az.enabled = true;
 	
-	/* How many coins the analyzer will scan per frame.
+	/* How many tokens the analyzer will scan per frame.
 	Reduce it if the simulation is laggy, otherwise set this as high as possible for the fastest analysis. */
 	Az.rate = 2048;
 	
@@ -240,13 +264,13 @@
 	// pass 0: begin creating the meta-ledger...
 		console.log('maxDoubt: ', Az.maxDoubt);
 		Az.pass = 0;
-		Az.goodCoins = {};
+		Az.goodTokens = {};
 		
-		Az.scanCoin = function(coin) {
-			if (isNaN(coin.date)) return;
-			if (coin.doubt > 0) return;
+		Az.scanToken = function(token) {
+			if (isNaN(token.date)) return;
+			if (token.doubt > 0) return;
 			
-			Az.goodCoins[coin.name] = true;
+			Az.goodTokens[token.name] = true;
 		};
 		
 		Az.finishedUser = function(user) {};
@@ -257,22 +281,26 @@
 		Az.pass = 1;
 		Az.hash = 0x60000005; // start with some big, arbitrary prime number.
 		
-		Az.scanCoin = function(coin) {
-			if (isNaN(coin.date)) return;
-			if (coin.doubt >= 1) return;
-			if (!Az.goodCoins[coin.name]) return;
+		Az.scanToken = function(token) {
+			if (isNaN(token.date)) return;
+			if (token.doubt >= 1) return;
 			
-			let string = coin.name;
+			// if not in the meta-ledger, ignore:
+			if (!Az.goodTokens[token.name]) return;
+			
+			let string = token.name;
 			for (let i=0; i<string.length; i++)
 				// add the next char, multiply by a big number, keep 32 bits:
 				Az.hash = ((Az.hash +string.charCodeAt(i)) *0x3fffff) >>> 0;
 			
-			Az.maxDoubt = Math.max(Az.maxDoubt, coin.doubt);
+			Az.maxDoubt = Math.max(Az.maxDoubt, token.doubt);
 		};
 		
 		Az.finishedUser = function(user) {
 			if (user.ledgerHash != Az.hash) {
 				user.ledgerHash = Az.hash;
+				
+				// show a blip to indicate analysis is done for this node.
 				user.blip = 1;
 			}
 			Az.hash = 0x60000005;
@@ -287,32 +315,32 @@
 		// finished with all users; go to next phase.
 			Az.beginPass[(Az.pass +1) %2]();
 			Az.userIndex = 0;
-			Az.coinIndex = 0;
+			Az.tokenIndex = 0;
 		}
 		
 		let user = sim.users[Az.userIndex];
 		
-		if (Az.coinIndex >= user.ledger.length) {
+		if (Az.tokenIndex >= user.ledger.length) {
 			
 			Az.finishedUser(user);
 			
 			// to next user...
 			Az.userIndex++;
-			Az.coinIndex = 0;
+			Az.tokenIndex = 0;
 			
 			return Az.step(tickets);
 		}
 		
-		Az.scanCoin(user.ledger[Az.coinIndex]);
+		Az.scanToken(user.ledger[Az.tokenIndex]);
 		tickets--;
 		
-		Az.coinIndex++;
+		Az.tokenIndex++;
 		return Az.step(tickets);
 	}
 	
 	Az.maxDoubt = 0;
 	Az.userIndex = 0;
-	Az.coinIndex = 0;
+	Az.tokenIndex = 0;
 }
 
 { // Simulator...
@@ -329,7 +357,7 @@
 	// Network properties and protocol constants...
 	sim.numUsers = 27;
 	sim.numPeers = 8;
-	sim.numCoins = 100;
+	sim.numTokens = 100;
 	sim.chanceAttackDate = 15;
 	sim.chanceAttackDoubleSpend = 15;
 	sim.timeSyncAccuracy = 2;
@@ -440,8 +468,8 @@
 			}
 		}
 		
-		sim.numCoins = Math.min(sim.numCoins, 1000);
-		sim.mint(sim.numCoins, 10);
+		sim.numTokens = Math.min(sim.numTokens, 1000);
+		sim.mint(sim.numTokens, 10);
 		
 		sim.autoTest();
 		sim.transactionsDone = 0;
@@ -512,7 +540,7 @@
 		return work;
 	}
 	
-	/* Distributes new coins among users. */
+	/* Distributes new tokens among users. */
 	sim.mint = function(n, amount) {
 		while (n > 0)
 		for (let u of sim.users) {
@@ -527,7 +555,7 @@
 			tx.size = tx.getSize();
 			
 			for (let u of sim.users) {
-				let c = new Coin(tx, 0);
+				let c = new Token(tx, 0);
 				c.create();
 				c.energy = fakeEnergy;
 				c.date = u.time() -sim.timeSyncAccuracy *2 -sim.prefTime;
@@ -659,7 +687,7 @@
 			Util.choose(sim.users).test();
 		});
 	
-		inp.tipText = "<b>Test</b><p>A random user will select a random user and pay a random amount to that user, which may be himself. If a double-spend attack is elected, a second random payment may be made using the same coin(s).</p><p>If nothing happens, it is because the chosen user doesn't have funds.</p>";
+		inp.tipText = "<b>Test</b><p>A random user will select a random user and pay a random amount to that user, which may be himself. If a double-spend attack is elected, a second random payment may be made using the same token(s).</p><p>If nothing happens, it is because the chosen user doesn't have funds.</p>";
 	}
 	
 	{ let inp = createInputCheckbox('autoTestEnabled', 'Auto-Test', function(state) {
@@ -668,7 +696,7 @@
 		
 		inp.checked = sim[inp.name];
 		
-		inp.tipText = "<b>Auto-Test</b><p>When enabled, all users will constantly author random payments to keep their task queues full, to simulate full bandwidth utilization and resistance to spam.</p><p>When disabled, users will consume their task queues to completion, but no new transactions will be generated.</p><p>If attacks are enabled, coins will sometimes be destroyed by illegal use. This may result in a situation in which no users have any coins left to spend.</p>";
+		inp.tipText = "<b>Auto-Test</b><p>When enabled, all users will constantly author random payments to keep their task queues full, to simulate full bandwidth utilization and resistance to spam.</p><p>When disabled, users will consume their task queues to completion, but no new transactions will be generated.</p><p>If attacks are enabled, tokens will sometimes be destroyed by illegal use. This may result in a situation in which no users have any tokens left to spend.</p>";
 	}
 	
 	{ let inp = createInputCheckbox('analyzerEnabled', 'Analyzer',
@@ -679,7 +707,7 @@
 		
 		inp.checked = true;
 		
-		inp.tipText = "<b>Analyzer</b><p>When enabled, each node will be given a color representing the contents of its ledger, such that nodes with identical ledgers will have identical colors.</p><p>To verify consensus, disable Auto-Test and set Simulation Speed to maximum. Wait for all remaining tasks to be processed, and then all nodes should have the same color.</p><p>Analysis is more complex when there are more coins and more users. Reducing the simulation speed will allow the analyzer more time to work relative to the simulation.</p>";
+		inp.tipText = "<b>Analyzer</b><p>When enabled, each node will be given a color representing the contents of its ledger, such that nodes with identical ledgers will have identical colors.</p><p>To verify consensus, disable Auto-Test and set Simulation Speed to maximum. Wait for all remaining tasks to be processed, and then all nodes should have the same color.</p><p>Analysis is more complex when there are more tokens and more users. Reducing the simulation speed will allow the analyzer more time to work relative to the simulation.</p>";
 	}
 	
 	sim.networkPropertyInputs = [];
@@ -702,13 +730,13 @@
 		inp.tipText = "<b>Degree of Infection</b><p>Each user will randomly select this many other users to send their messages to. If this number is too low, messages may not fully saturate the network, causing failure.</p>";
 	}
 	
-	{ let inp = createInputNumber('numCoins', 'Number of coins: ');
+	{ let inp = createInputNumber('numTokens', 'Number of tokens: ');
 		inp.min = 0;
 		inp.max = 1000;
 		inp.step = 1;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Number of Coins</b><p>The number of coins to distribute among users when the network is created.</p><p>More coins will result in a more busy and complex simulation. A higher number will demand more system memory and may impact performance.</p>";
+		inp.tipText = "<b>Number of Tokens</b><p>The number of tokens to distribute among users when the network is created.</p><p>More tokens will result in a more busy and complex simulation. A higher number will demand more system memory and may impact performance.</p>";
 	}
 	
 	{ let inp = createInputNumber('chanceAttackDate', 'Bad time %: ');
@@ -716,7 +744,7 @@
 		inp.max = 100;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Bad Time %</b><p>The percentage of transactions that will be authored with a bad timestamp in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to back-date their transactions to steal coin energy, and keeps all users in agreement about how to respond.</p>";
+		inp.tipText = "<b>Bad Time %</b><p>The percentage of transactions that will be authored with a bad timestamp in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to back-date their transactions to steal token energy, and keeps all users in agreement about how to respond.</p>";
 	}
 	
 	{ let inp = createInputNumber('chanceAttackDoubleSpend', 'Double-spend %: ');
@@ -724,7 +752,7 @@
 		inp.max = 100;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Double-Spend %</b><p>The percentage of transactions that will be followed by a second transaction with some of the same coins, in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to spend a coin that they no longer own, and keeps all users in agreement about how to respond.</p>";
+		inp.tipText = "<b>Double-Spend %</b><p>The percentage of transactions that will be followed by a second transaction with some of the same tokens, in such a way as to attempt the greatest harm to network consensus.</p><p>This demonstrates how the protocol holds users accountable for attempting to spend a token that they no longer own, and keeps all users in agreement about how to respond.</p>";
 	}
 	
 	{ let inp = createInputNumber('timeSyncAccuracy', 'Time sync accuracy: ');
@@ -738,7 +766,7 @@
 		inp.min = 0;
 		sim.networkPropertyInputs.push(inp);
 		
-		inp.tipText = "<b>Energy Half-Life</b><p>The elapsed time at which a coin's energy will have decayed to 50%.</p><p>It has not yet been decided what values are optimal, so I've chosen this value arbitrarily.</p>";
+		inp.tipText = "<b>Energy Half-Life</b><p>The elapsed time at which a token's energy will have decayed to 50%.</p><p>It has not yet been decided what values are optimal, so I've chosen this value arbitrarily.</p>";
 	}
 	
 	{ let inp = createInputNumber('taskLogLength', 'Task log length: ');
@@ -855,35 +883,35 @@
 	}
 }
 
-{ // Tx, Rq, Task, Coin, User...
+{ // Tx, Rq, Task, Token...
 	
-	/* Transaction. A transaction replaces some coins in the ledger with new coins, having the same total value. */
+	/* Transaction. A transaction replaces some tokens in the ledger with new tokens, having the same total value. */
 	function Tx() {
 		// the unique name of this transaction.
 		// this would be a secure hash of the contents of this tx.
 		this.name = Util.randomHex(16);
 		
-		// the names of the coins being spent, in a canonical order.
+		// the names of the tokens being spent, in a canonical order.
 		this.inputs = [];
 		this.inputs.cmp = Queue.cmp;
 		
-		// the definitions of coins being created, as {owner, value}.
+		// the definitions of tokens being created, as {owner, value}.
 		this.outputs = [];
 	}
 	
 	/* Returns the digital size of this transaction message, in bytes.
-	The real-world protocol would have to formally define this so that all users know the exact same number, because this is how much energy gets added to the coins. */
+	The real-world protocol would have to formally define this so that all users know the exact same number, because this is how much energy gets added to the tokens. */
 	Tx.prototype.getSize = function() {
 		let b = 0;
-		b += 1; // number of inCoins
-		b += (32 +1) *this.inputs.length; // name for all input coins
-		b += 1; // number of outCoins
-		b += (512 +8) *this.outputs.length; // public key, value for all output coins
+		b += 1; // number of inTokens
+		b += (32 +1) *this.inputs.length; // name for all input tokens
+		b += 1; // number of outTokens
+		b += (512 +8) *this.outputs.length; // public key, value for all output tokens
 		return b;
 	}
 	
 	
-	/* Request. A request is a message that defines a transaction, specifies an input of that transaction, and gives that input's digital signature of that transaction. A transaction will not take place until all input coins have given this authentication individually. */
+	/* Request. A request is a message that defines a transaction, specifies an input of that transaction, and gives that input's digital signature of that transaction. A transaction will not take place until all input tokens have given this authentication individually. */
 	function Rq(tx, idx) {
 		
 		// the unique name of this request.
@@ -893,7 +921,7 @@
 		// the requested transaction.
 		this.tx = tx;
 		
-		// the index of the tx's input coin making the request.
+		// the index of the tx's input token making the request.
 		this.sourceIndex = idx;
 		
 		// the author's formalization of this request's date of effect.
@@ -905,23 +933,23 @@
 	/* Returns the digital size of this request message, in bytes. */
 	Rq.prototype.getSize = function() {
 		let b = this.tx.size;
-		b += 1; // index of the input coin making the request.
-		b += 512; // signature of input coin on this request.
+		b += 1; // index of the input token making the request.
+		b += 512; // signature of input token on this request.
 		b += 8; // date of effect
 		return b;
 	}
 	
 	
 	/* The representation of a request as perceived by a particular user. */
-	function Task(user, rq, sourceCoin) {
+	function Task(user, rq, sourceToken) {
 		// the user to which this task belongs.
 		this.user = user;
 		
 		// the request that this task represents.
 		this.rq = rq;
 		
-		// the coin making this request, found in the user's ledger.
-		this.sourceCoin = sourceCoin;
+		// the token making this request, found in the user's ledger.
+		this.sourceToken = sourceToken;
 		
 		// the date at which this task was done.
 		this.dateDone = Infinity;
@@ -929,13 +957,13 @@
 	
 	/* Returns the priority index of this request at the given time. */
 	Task.prototype.getPriority = function(time) {
-		// the value/energy ratio of the source coin:
-		return this.sourceCoin.value /this.sourceCoin.getEnergy(time);
+		// the value/energy ratio of the source token:
+		return this.sourceToken.value /this.sourceToken.getEnergy(time);
 	}
 	
 	/* Sorts tasks by descending priority index. The greatest priority tasks are performed first. */
 	Task.cmpPriority = function(a,b) {
-		let t = Math.max(a.sourceCoin.formalDate, b.sourceCoin.formalDate);
+		let t = Math.max(a.sourceToken.formalDate, b.sourceToken.formalDate);
 		let ap = a.getPriority(t);
 		let bp = b.getPriority(t);
 		if (ap > bp) return -1;
@@ -974,52 +1002,53 @@
 	}
 	
 	
-	/* The representation of a coin in the ledger of a particular user.	These are not shared between users; they simulate independently perceived data. */
-	function Coin(tx, idx) {
-		// the tx that defines this coin.
+	/* The representation of a token in the ledger of a particular user.
+	These are not shared between users; they simulate independently perceived data. */
+	function Token(tx, idx) {
+		// the tx that defines this token.
 		this.tx = tx;
 		
-		// the unique name of this coin.
+		// the unique name of this token.
 		// name of the tx, followed by 1-byte index.
 		this.name = tx.name +('00' +idx.toString(16)).slice(-3);
 		
-		// the owner of this coin.
+		// the owner of this token.
 		// (this would be a public key)
 		this.owner = tx.outputs[idx].owner;
 		
-		// the monetary value of this coin.
+		// the monetary value of this token.
 		this.value = tx.outputs[idx].value;
 	}
 	
-	Coin.prototype.create = function() {
+	Token.prototype.create = function() {
 		
 		// creation...
 		
-		// the tasks that define the creation of this coin as an output.
-		// like pieces of a jigsaw puzzle, this coin manifests when the last
+		// the tasks that define the creation of this token as an output.
+		// like pieces of a jigsaw puzzle, this token manifests when the last
 		// of these is done.
 		this.sourceTasks = [];
 		this.sourceTasks.cmp = Task.cmpName;
 		
-		// the observed time of this coin's origin;
+		// the observed time of this token's origin;
 		// the date at which the final sourceTask is done.
 		this.date = NaN;
 		
-		// the latest formal date among this coin's source requests.
+		// the latest formal date among this token's source requests.
 		this.formalDate = NaN;
 		
-		// the energy of this coin at its formal time of origin.
-		// this is inherited from its source coins and source tasks.
+		// the energy of this token at its formal time of origin.
+		// this is inherited from its source tokens and source tasks.
 		this.energy = 0;
 		
 		
 		// usage...
 		
-		// all tasks signed by this coin, in the order they were/will be done.
+		// all tasks signed by this token, in the order they were/will be done.
 		this.tasks = [];
 		this.tasks.cmp = Task.cmpDateDone;
 		
-		// the first task done by this coin (the first request granted).
+		// the first task done by this token (the first request granted).
 		// if protocol is followed, there won't be another.
 		this.spent = null;
 		
@@ -1027,48 +1056,50 @@
 		this.doubt = 0;
 	}
 	
-	Coin.prototype.manifest = function() {	
+	Token.prototype.manifest = function() {	
 		// get formal date...
 		for (let task of this.sourceTasks)
 			if (!(task.rq.formalDate <= this.formalDate))
 				this.formalDate = task.rq.formalDate;
 			
-		// inherit energy from parent coins...
+		// inherit energy from parent tokens...
 		let totalValue = 0;
 		let totalEnergy = 0;		
 		for (let task of this.sourceTasks) {
-			totalValue += task.sourceCoin.value;
-			totalEnergy += task.sourceCoin.getEnergy(this.formalDate);
+			totalValue += task.sourceToken.value;
+			totalEnergy += task.sourceToken.getEnergy(this.formalDate);
 			totalEnergy += task.rq.size;
 		}
 		this.energy = totalEnergy *(this.value /totalValue);
 	}
 	
-	// return the energy of this coin at the specific time.
-	Coin.prototype.getEnergy = function(time) {
+	// return the energy of this token at the specific time.
+	Token.prototype.getEnergy = function(time) {
 		return this.energy *sim.energyDecay **(time -this.formalDate);
 	}	
 	
-	Coin.cmpName = function(a,b) {
+	Token.cmpName = function(a,b) {
 		return Queue.cmp(a.name, b.name);
 	}
 	
-	Coin.cmpValue = function(a,b) {
+	Token.cmpValue = function(a,b) {
 		if (a.value < b.value) return -1;
 		if (a.value > b.value) return  1;
 		return Queue.cmp(a.name, b.name);
-	}
-	
-	
-	// relationships between server and client are beyond the domain of this simulation.
+	}	
+}
+
+{ // User...
+	/* To simplify this simulation, each member of the network also represents a user of the currency, with an individual wallet and cash balance. In real life, the two are not necessarily identified together; a user may own many network nodes and a network node may represent many users. */
 	function User() {
 		
-		// sorted list of all coins.
+		// my copy of the ledger; a list of all existing tokens, sorted by name.
 		this.ledger = [];
-		this.ledger.cmp = Coin.cmpName;
+		this.ledger.cmp = Token.cmpName;
 		
-		this.spentCoins = [];
-		this.spentCoins.cmp = Coin.cmpName;
+		// tokens that were recently spent, sorted by name.
+		this.spentTokens = [];
+		this.spentTokens.cmp = Token.cmpName;
 		
 		// a sensitive 32-bit digest of the ledger, as an integer.
 		this.ledgerHash = 0;
@@ -1077,7 +1108,7 @@
 		this.pendingTasks = [];
 		this.pendingTasks.cmp = Task.cmpPriority;
 		
-		// tasks I will process, but not until the sourceCoin is saturated.
+		// tasks I will process, but not until the sourceToken is saturated.
 		this.preTasks = [];
 		this.preTasks.cmp = Task.cmpName;
 		
@@ -1100,33 +1131,33 @@
 		this.sync();
 	}
 	
-	// as client...
+	// as user of currency...
 	
 	User.prototype.getWallet = function(doubleSpend) {
 		let wallet = [];
-		wallet.cmp = Coin.cmpValue;
+		wallet.cmp = Token.cmpValue;
 		wallet.balance = 0;
-		for (let coin of this.ledger) {
-			// can't use a coin without signing key (not my coin):
-			if (coin.owner != this) continue;
+		for (let token of this.ledger) {
+			// can't use a token without signing key (not my token):
+			if (token.owner != this) continue;
 			
-			// don't use a coin before its formal date of effect:
-			if (coin.formalDate > this.time()) continue;
+			// don't use a token before its formal date of effect:
+			if (token.formalDate > this.time()) continue;
 			
-			// don't use an undesirable coin:
-			if (coin.doubt > 0) continue;
+			// don't use an undesirable token:
+			if (token.doubt > 0) continue;
 			
 			if (!doubleSpend) {
-				// don't use a coin with a pending task:
-				if (coin.tasks.length != 0) continue;
+				// don't use a token with a pending task:
+				if (token.tasks.length != 0) continue;
 			}
 			
-			// don't use a coin without sufficent saturation:
-			let sat = this.getCoinSaturation(coin, this.time());
+			// don't use a token without sufficent saturation:
+			let sat = this.getTokenSaturation(token, this.time());
 			if (sat < sim.prefTime) continue;
 			
-			Queue.push(wallet, coin);
-			wallet.balance += coin.value;
+			Queue.push(wallet, token);
+			wallet.balance += token.value;
 		}
 		return wallet;
 	}
@@ -1135,7 +1166,7 @@
 		let tx = new Tx();
 		tx.author = this;
 		
-		// get value-ascending list of spendable coins:
+		// get value-ascending list of spendable tokens:
 		let wallet = this.getWallet(doubleSpend);
 		
 		// choose amount, if not specified...
@@ -1144,14 +1175,14 @@
 			Math.round(wallet.balance *0.75)
 		);
 		
-		// choose coins to spend...
+		// choose tokens to spend...
 		let total = 0;
 		for (let i=0; i<wallet.length; i++) {
-			let coin = wallet[i];
+			let token = wallet[i];
 			if (total >= amount) break;
 			
-			Queue.push(tx.inputs, coin.name);
-			total += coin.value;
+			Queue.push(tx.inputs, token.name);
+			total += token.value;
 		}
 		
 		// if insufficient funds, cancel:
@@ -1175,7 +1206,7 @@
 		let speaker = this;
 		if (doubleSpend) speaker = Util.choose(sim.users);
 		
-		// each input coin issues this request...
+		// each input token issues this request...
 		for (let i=0; i<tx.inputs.length; i++) {
 			let rq = new Rq(tx, i);
 			speaker.hearGossip(rq);
@@ -1189,26 +1220,26 @@
 		// check for echo...
 		if (this.echoes[rq.name]) return;
 		
-		// find source coin in my ledger...
-		let sourceCoin = Queue.get(
+		// find source token in my ledger...
+		let sourceToken = Queue.get(
 			this.ledger, {name: rq.tx.inputs[rq.sourceIndex]}
 		);
 		
-		if (!sourceCoin)
-		sourceCoin = Queue.get(
-			this.spentCoins, {name: rq.tx.inputs[rq.sourceIndex]}
+		if (!sourceToken)
+		sourceToken = Queue.get(
+			this.spentTokens, {name: rq.tx.inputs[rq.sourceIndex]}
 		);
 		
-		// if I can't find the source coin, I can't interpret this message:
-		if (!sourceCoin) return;
+		// if I can't find the source token, I can't interpret this message:
+		if (!sourceToken) return;
 		
-		// a coin doesn't formally exist until it manifests:
-		if (isNaN(sourceCoin.date)) return;
+		// a token doesn't formally exist until it manifests:
+		if (isNaN(sourceToken.date)) return;
 		
-		// I have found the coin.
+		// I have found the token.
 		
 		// create a task:
-		let task = new Task(this, rq, sourceCoin);
+		let task = new Task(this, rq, sourceToken);
 		
 		// signature check would be here.
 		
@@ -1217,7 +1248,7 @@
 		this.echoes[rq.name] = true;
 		
 		// too early?
-		let sat = this.getCoinSaturation(task.sourceCoin, this.time());
+		let sat = this.getTokenSaturation(task.sourceToken, this.time());
 		
 		if (sat < sim.satTime) {
 		// too early; drop this task in the preTask buffer...
@@ -1238,11 +1269,11 @@
 	}
 	
 	User.prototype.hearTask = function(task) {
-		// insert this task in sourceCoin's task queue:
-		let idx = Queue.getIndex(task.sourceCoin.tasks, task);
-		task.sourceCoin.tasks.splice(idx, 0, task);
+		// insert this task in sourceToken's task queue:
+		let idx = Queue.getIndex(task.sourceToken.tasks, task);
+		task.sourceToken.tasks.splice(idx, 0, task);
 		
-		// if this task is not the first or second operation upon sourceCoin,
+		// if this task is not the first or second operation upon sourceToken,
 		// it is not relevant for processing or gossiping.
 		if (idx >= 2) return;
 		
@@ -1252,8 +1283,8 @@
 		
 		// if it bumped a pending task to the third index,
 		// remove that one from my work queue:
-		if (task.sourceCoin.tasks.length > 2)
-			Queue.remove(this.pendingTasks, task.sourceCoin.tasks[2]);
+		if (task.sourceToken.tasks.length > 2)
+			Queue.remove(this.pendingTasks, task.sourceToken.tasks[2]);
 		
 		// if my work queue was empty, I need to wake up...
 		if (!this.doTaskEvent) this.doTaskEvent =
@@ -1294,18 +1325,18 @@
 					(sim.satTime *4 +sim.timeSyncAccuracy *2) *(Util.rand() *10);
 				
 				// violations of chronology are not intended:
-				if (task.rq.formalDate < task.sourceCoin.formalDate)
-					task.rq.formalDate = task.sourceCoin.formalDate +0.001;
+				if (task.rq.formalDate < task.sourceToken.formalDate)
+					task.rq.formalDate = task.sourceToken.formalDate +0.001;
 			}
 		}
 		
 		
-		if (task.sourceCoin.spent)
-		// a request by this coin was previously done.
-		// oopsie! this coin has committed a no-no!
+		if (task.sourceToken.spent)
+		// a request by this token was previously done.
+		// oopsie! this token has committed a no-no!
 			this.doBadTask(task);
 		else
-		// this is the coin's first request to be done.
+		// this is the token's first request to be done.
 		// all good.
 			this.doGoodTask(task);
 		
@@ -1328,53 +1359,56 @@
 	}
 	
 	User.prototype.doGoodTask = function(task) {
-		// the first request done for this coin.
+		// the first request done for this token.
 		
 		// assign doubt for bad timestamp...
 		let sat = this.getSaturation(task, task.rq.formalDate, this.time());
 		let doubt = sat /((sim.satTime +sim.timeSyncAccuracy *2) *4);
-		this.doubtCoin(task.sourceCoin, doubt);
+		this.doubtToken(task.sourceToken, doubt);
 		
 		
-		// find or create output coins...
+		// find or create output tokens...
 		for (let i=0; i<task.rq.tx.outputs.length; i++) {
 			let output = task.rq.tx.outputs[i];
 			
-			let coin = new Coin(task.rq.tx, i);
-			let get = Queue.get(this.ledger, coin);
+			let token = new Token(task.rq.tx, i);
+			let get = Queue.get(this.ledger, token);
 			
-			if (get) coin = get;
+			if (get) token = get;
 			else {
-				coin.create();
-				Queue.push(this.ledger, coin);
+				token.create();
+				Queue.push(this.ledger, token);
 			}
 			
-			coin.doubt = Math.max(task.sourceCoin.doubt, coin.doubt);
-			Queue.push(coin.sourceTasks, task);
+			token.doubt = Math.max(task.sourceToken.doubt, token.doubt);
+			Queue.push(token.sourceTasks, task);
 			
-			if (coin.sourceTasks.length == coin.tx.inputs.length) {
-				coin.date = this.time();
-				coin.manifest();
+			if (token.sourceTasks.length == token.tx.inputs.length) {
+				token.date = this.time();
+				token.manifest();
 			}
 		}
 		
-		task.sourceCoin.spent = task;
+		task.sourceToken.spent = task;
 		
-		Queue.remove(this.ledger, task.sourceCoin);
-		Queue.push(this.spentCoins, task.sourceCoin);
+		// the token has been consumed; remove it from the ledger:
+		Queue.remove(this.ledger, task.sourceToken);
+		
+		// ...and add it to the spent tokens set:
+		Queue.push(this.spentTokens, task.sourceToken);
 		
 		new Event(
-			User.prototype.spentCoin, this, [task.sourceCoin],
+			User.prototype.spentToken, this, [task.sourceToken],
 			sim.time +sim.prefTime *2
 		);
 	}
 	
 	User.prototype.doBadTask = function(task) {
 		let sat = this.getSaturation(
-			task.sourceCoin.spent, task.sourceCoin.spent.dateDone, this.time()
+			task.sourceToken.spent, task.sourceToken.spent.dateDone, this.time()
 		);
 		let doubt = 1.5 -sat /(sim.satTime *4);
-		this.doubtCoin(task.sourceCoin, doubt);
+		this.doubtToken(task.sourceToken, doubt);
 	}
 	
 	User.prototype.autoTest = function() {
@@ -1400,28 +1434,28 @@
 	
 	sim.debug = [];
 	
-	User.prototype.doubtCoin = function(coin, doubt) {
+	User.prototype.doubtToken = function(token, doubt) {
 		// if already more doubted, ignore:
-		if (coin.doubt > doubt) return;
+		if (token.doubt > doubt) return;
 		
-		// apply doubt to this coin:
-		coin.doubt = doubt;
+		// apply doubt to this token:
+		token.doubt = doubt;
 		
 		// pass to all affected custody chains...
 		
-		// if this coin is unspent, it has no children:
-		if (!coin.spent) return;
+		// if this token is unspent, it has no children:
+		if (!token.spent) return;
 		
-		let tx = coin.spent.rq.tx;
+		let tx = token.spent.rq.tx;
 		
 		for (let i=0; i<tx.outputs.length; i++) {
 			let tmp = {name: tx.name +('00' +i.toString(16)).slice(-3)};
 			let get = Queue.get(this.ledger, tmp);
-			this.doubtCoin(get, doubt);
+			this.doubtToken(get, doubt);
 		}
 	}
 	
-	// estimates the tasks's saturation between the two times.
+	// infers the tasks's saturation between the two times.
 	User.prototype.getSaturation = function(task, t0, t1, debug) {
 		let sat = 0;
 		let idx = Queue.getIndex(this.taskLog, t0);
@@ -1457,13 +1491,14 @@
 		}
 	}
 	
-	User.prototype.getCoinSaturation = function(coin, time) {
-		if (isNaN(coin.date)) return 0;
+	// returns the minimum saturation of the tasks that spawn this token.
+	User.prototype.getTokenSaturation = function(token, time) {
+		if (isNaN(token.date)) return 0;
 		
-		if (!coin.sourceTasks.length) return Infinity;
+		if (!token.sourceTasks.length) return Infinity;
 		
 		let min = NaN;
-		for (let sourceTask of coin.sourceTasks) {
+		for (let sourceTask of token.sourceTasks) {
 			let s = this.getSaturation(sourceTask, sourceTask.dateDone, time);
 			
 			if (s >= min) continue;
@@ -1472,44 +1507,40 @@
 		return min;
 	}
 	
+	// removes old tasks from my task log.
 	User.prototype.cleanTaskLog = function() {
-		let idx = Queue.getIndex(this.taskLog, this.time() -sim.taskLogLength);
-		
-		if (0)
-		for (let i=0; i<idx; i++) {
-			let sat = this.getSaturation(this.taskLog[i], this.taskLog[i].dateDone, this.time());
-			if (sat < sim.prefTime) debugger;
-		}
-		
+		let idx = Queue.getIndex(this.taskLog, this.time() -sim.taskLogLength);		
 		this.taskLog.splice(0, idx);
 	}
 	
-	User.prototype.spentCoin = function(coin) {
+	// safely cleans up the spent token from memory.
+	User.prototype.spentToken = function(token) {
 		
 		let sat = this.getSaturation(
-			coin.spent, coin.spent.dateDone, this.time()
+			token.spent, token.spent.dateDone, this.time()
 		);
 		
 		if (sat >= sim.prefTime -.0001) {
-			// remove spent coin from ledger:
-			Queue.remove(this.spentCoins, coin);
+			// remove spent token from ledger:
+			Queue.remove(this.spentTokens, token);
 			
 			// cancel any pending tasks; they are now unintelligible:
-			for (let task of coin.tasks) {
+			for (let task of token.tasks) {
 				Queue.remove(this.pendingTasks, task);
 				delete this.echoes[task.rq.name];
 			}
 			
 			// delete pointers for gc:
-			delete coin.spent;
-			delete coin.tasks;
-			delete coin.sourceTasks;
+			delete token.spent;
+			delete token.tasks;
+			delete token.sourceTasks;
 			
 			return;
 		}
 		
+		// this spent token may still be relevant. check again later...
 		new Event(
-			User.prototype.spentCoin, this, [coin],
+			User.prototype.spentToken, this, [token],
 			sim.time +(sim.prefTime -sat) *2
 		);
 	}
@@ -1524,7 +1555,7 @@
 		for (let i=0; i<this.preTasks.length; i++) {
 			let task = this.preTasks[i];
 			
-			let sat = this.getCoinSaturation(task.sourceCoin, this.time());
+			let sat = this.getTokenSaturation(task.sourceToken, this.time());
 			if (sat >= sim.satTime -0.0001) {
 				// remove task from preTasks:
 				this.preTasks.splice(i--,1);
